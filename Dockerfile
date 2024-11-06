@@ -1,11 +1,12 @@
-FROM node:lts
+FROM node:lts-alpine
 
-RUN adduser --disabled-password --gecos "" appuser
-RUN mkdir /app && chown -R appuser /app
+RUN apk --no-cache add curl \
+    && mkdir /app && chown -R node:node /app
+
 WORKDIR /app
-USER appuser
+USER node
 
-COPY --chown=appuser . .
+COPY --chown=node . .
 RUN yarn install --production --frozen-lockfile
 
 CMD ["yarn", "start"]
