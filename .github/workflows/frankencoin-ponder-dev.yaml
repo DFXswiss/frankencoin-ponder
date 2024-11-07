@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_TAGS: dfxswiss/frankencoin-ponder:latest
+  DOCKER_TAGS: dfxswiss/frankencoin-ponder:beta
 
 jobs:
   build-and-deploy:
