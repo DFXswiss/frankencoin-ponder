@@ -7,6 +7,9 @@ on:
 
 env:
   DOCKER_TAGS: dfxswiss/frankencoin-ponder:latest
+  AZURE_RESOURCE_GROUP: rg-dfx-api-prd
+  AZURE_CONTAINER_APP: ca-dfx-fcp-prd
+  DEPLOY_INFO: ${{ github.ref_name }}-${{ github.sha }}
 
 jobs:
   build-and-deploy:
@@ -34,3 +37,22 @@ jobs:
           context: .
           push: true
           tags: ${{ env.DOCKER_TAGS }}
+
+# The following lines will be commented out
+# as soon as we have set up the container apps on azure production
+
+#      - name: Log in to Azure
+#        uses: azure/login@v1
+#        with:
+#          creds: ${{ secrets.PRD_CREDENTIALS }}
+
+#      - name: Update Azure Container App
+#        uses: azure/CLI@v1
+#        with:
+#          inlineScript: |
+#            az containerapp update --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --name ${{ env.AZURE_CONTAINER_APP }} --image ${{ env.DOCKER_TAGS }} --set-env-vars DEPLOY_INFO=${{ env.DEPLOY_INFO }}
+
+#      - name: Logout from Azure
+#        run: |
+#          az logout
+#        if: always()
