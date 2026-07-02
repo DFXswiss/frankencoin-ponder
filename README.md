@@ -1,68 +1,41 @@
-# Frankencoin Ponder
+# Frankencoin Ponder Indexer
 
-## Deployment of service
+Blockchain indexer for the Frankencoin (ZCHF) ecosystem. Indexes Ethereum mainnet + 7 L2s and exposes data via GraphQL.
 
--   Main branch should auto. deploy to: **ponder.frankencoin.com**
--   test Deployment deploy to: **ponder.test.frankencoin.com**
+- Production: **ponder.frankencoin.com**
+- Test: **ponder.test.frankencoin.com**
 
-## Ponder needs .env.local
+## Setup
 
-check out ".env.local" file to adjust environment.
-For SQLite, REMOVE THE DATABASE_URL LINE.
-
-```
-# Select Profile/Chain
-PONDER_PROFILE=polygon
-
-# Mainnet RPC URL used for fetching blockchain data. Alchemy is recommended.
-PONDER_RPC_URL_MAINNET=https://eth-mainnet.g.alchemy.com/v2/...
-PONDER_RPC_URL_POLYGON=... # For testing purposes only
-
-# (Optional) Postgres database URL. If not provided, SQLite will be used.
-DATABASE_URL=
+```bash
+cp .env.example .env.local
+yarn install
+yarn dev
 ```
 
-## Ponder config
+**.env.local** — required fields:
 
-You can adjust the default chain and chain specific parameters in "ponder.config.ts".
+```env
+ALCHEMY_RPC_KEY=your_key_here
 
-```
-// (add custom chain in ./ponder.address.ts)
-// mainnet (default), ethereum3, polygon
-const chain =
-	(process.env.PONDER_PROFILE as string) == 'polygon'
-		? polygon
-		: (process.env.PONDER_PROFILE as string) == 'ethereum3'
-		? ethereum3
-		: mainnet;
+# Optional: Postgres (omit to use SQLite)
+DATABASE_URL=postgres://...
 
-const CONFIG = {
-	[mainnet.id]: {
-		rpc: process.env.RPC_URL_MAINNET ?? mainnet.rpcUrls.default.http[0],
-		startBlockA: 18451518,
-		startBlockB: 18451536,
-		blockrange: undefined,
-		maxRequestsPerSecond: undefined,
-		pollingInterval: undefined,
-	},
+# Optional: analytics tables (disabled by default)
+ENABLE_TRANSACTION_LOG=false
 ```
 
-## Add / Adjust custom chain(s)
+## Commands
 
-Edit and add your custom chain: "ponder.chains.ts"
-
-Example:
-
+```bash
+yarn dev          # development (live reload, no UI)
+yarn dev:ui       # development with Ponder UI
+yarn start        # production
+yarn codegen      # regenerate types after schema changes
+yarn typecheck    # TypeScript check
 ```
-export const ethereum3 = {
-	id: 1337,
-	name: 'Ethereum3',
-	nativeCurrency: { name: 'Ethereum3', symbol: 'ETH3', decimals: 18 },
-	rpcUrls: {
-		default: { http: ['https://ethereum3.3dotshub.com'] },
-	},
-	blockExplorers: {
-		default: { name: 'Blockscout', url: 'https://blockscout3.3dotshub.com' },
-	},
-} as const satisfies Chain;
-```
+
+## Docs
+
+See [CLAUDE.md](./CLAUDE.md) for architecture and development guidance.  
+See [INDEXER_SUMMARY.md](./INDEXER_SUMMARY.md) for full schema and table reference.

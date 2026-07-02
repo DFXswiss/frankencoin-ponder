@@ -1,90 +1,79 @@
-import { ERC20ABI } from '@frankencoin/zchf';
+import { ERC20ABI, PositionV1ABI } from '@frankencoin/zchf';
 import { ponder } from 'ponder:registry';
 import {
 	CommonEcosystem,
-	MintingHubV2ChallengeBidV2,
-	MintingHubV2ChallengeV2,
-	MintingHubV2PositionV2,
-	MintingHubV2Status,
+	MintingHubV1ChallengeBidV1,
+	MintingHubV1ChallengeV1,
+	MintingHubV1PositionV1,
+	MintingHubV1Status,
 } from 'ponder:schema';
 import { normalizeAddress } from './utils/format';
-import { resolvePositionOwner } from './utils/ownership';
 import { maxUint256 } from 'viem';
 
 /*
 Events
 
-MintingHubV2:PositionOpened
-MintingHubV2:ChallengeStarted
-MintingHubV2:ChallengeAverted
-MintingHubV2:ChallengeSucceeded
+MintingHubV1:PositionOpened
+MintingHubV1:ChallengeStarted
+MintingHubV1:ChallengeAverted
+MintingHubV1:ChallengeSucceeded
 */
 
-// event PositionOpened(address indexed owner, address indexed position, address original, address collateral);
-ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
+ponder.on('MintingHubV1:PositionOpened', async ({ event, context }) => {
 	const { client } = context;
-	const { PositionV2 } = context.contracts;
 
 	// ------------------------------------------------------------------
 	// FROM EVENT & TRANSACTION
-	const { owner, position, collateral } = event.args;
-	const parent = event.args.original;
+	const { position, owner, zchf, collateral, price } = event.args;
 
 	const created: bigint = event.block.timestamp;
 
-	const isOriginal: boolean = normalizeAddress(parent) === normalizeAddress(position);
+	const isOriginal: boolean = !event.transaction.input.includes('0x5cb47919');
 	const isClone: boolean = !isOriginal;
 	const closed: boolean = false;
 
+	const original: `0x${string}` = isOriginal ? position : (`0x${event.transaction.input.slice(34, 74)}` as `0x${string}`);
+
 	// ------------------------------------------------------------------
-	// CONST + COLLATERAL ERC20 + CHANGEABLE (all independent, fetch in parallel)
-	// zchf address must be read first since it's needed for zchf ERC20 reads
+	// CONST + ERC20 + CHANGEABLE (all independent, fetch in parallel)
 	const [
-		original,
-		zchf,
 		minimumCollateral,
-		riskPremiumPPM,
+		annualInterestPPM,
 		reserveContribution,
 		start,
 		expiration,
 		challengePeriod,
-		limitForClones,
+		zchfName,
+		zchfSymbol,
+		zchfDecimals,
 		collateralName,
 		collateralSymbol,
 		collateralDecimals,
 		collateralBalance,
-		price,
+		// TODO: Keep in mind for developer, "limitForClones" is "limit" from SC
+		limitForClones,
+		// TODO: Keep in mind for developer, "availableForClones" is "limitForClones" from SC
 		availableForClones,
-		availableForMinting,
 		minted,
 		cooldown,
 	] = await Promise.all([
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'original' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'zchf' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'minimumCollateral' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'riskPremiumPPM' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'reserveContribution' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'start' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'expiration' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'challengePeriod' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'limit' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'minimumCollateral' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'annualInterestPPM' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'reserveContribution' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'start' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'expiration' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'challengePeriod' }),
+		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'name' }),
+		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'symbol' }),
+		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'decimals' }),
 		client.readContract({ abi: ERC20ABI, address: collateral, functionName: 'name' }).catch(() => ''),
 		client.readContract({ abi: ERC20ABI, address: collateral, functionName: 'symbol' }).catch(() => ''),
 		client.readContract({ abi: ERC20ABI, address: collateral, functionName: 'decimals' }).catch(() => 18),
 		client.readContract({ abi: ERC20ABI, address: collateral, functionName: 'balanceOf', args: [position] }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'price' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'availableForClones' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'availableForMinting' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'minted' }),
-		client.readContract({ abi: PositionV2.abi, address: position, functionName: 'cooldown' }),
-	]);
-
-	// ------------------------------------------------------------------
-	// ZCHF ERC20 (requires zchf address from above)
-	const [zchfName, zchfSymbol, zchfDecimals] = await Promise.all([
-		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'name' }),
-		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'symbol' }),
-		client.readContract({ abi: ERC20ABI, address: zchf, functionName: 'decimals' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'limit' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'limitForClones' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'minted' }),
+		client.readContract({ abi: PositionV1ABI, address: position, functionName: 'cooldown' }),
 	]);
 
 	// ------------------------------------------------------------------
@@ -92,22 +81,22 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 	// const priceAdjusted = price / BigInt(10 ** (36 - collateralDecimals));
 	const limitForPosition = (collateralBalance * price) / BigInt(10 ** zchfDecimals);
 	const availableForPosition = limitForPosition - minted;
-	// V2 deny() sets cooldown = type(uint40).max
-	const denied = BigInt(cooldown) === maxUint256;
+	// V1 deny() sets cooldown = type(uint256).max
+	const denied = cooldown === maxUint256;
 
 	// ------------------------------------------------------------------
 	// ------------------------------------------------------------------
 	// ------------------------------------------------------------------
 	// If clone, update original position
 	if (isClone) {
-		const [originalAvailableForClones, originalAvailableForMinting] = await Promise.all([
-			client.readContract({ abi: PositionV2.abi, address: original, functionName: 'availableForClones' }),
-			client.readContract({ abi: PositionV2.abi, address: original, functionName: 'availableForMinting' }),
+		const [originalLimitForClones, originalAvailableForClones] = await Promise.all([
+			client.readContract({ abi: PositionV1ABI, address: original, functionName: 'limit' }),
+			client.readContract({ abi: PositionV1ABI, address: original, functionName: 'limitForClones' }),
 		]);
 
-		await context.db.update(MintingHubV2PositionV2, { position: normalizeAddress(original) }).set({
+		await context.db.update(MintingHubV1PositionV1, { position: normalizeAddress(original) }).set({
+			limitForClones: originalLimitForClones,
 			availableForClones: originalAvailableForClones,
-			availableForMinting: originalAvailableForMinting,
 		});
 	}
 
@@ -115,13 +104,9 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 	// ------------------------------------------------------------------
 	// ------------------------------------------------------------------
 	// Create position entry for DB
-	// When a position is opened via CloneHelper, event.args.owner is still the
-	// CloneHelper address. Resolve to the actual beneficiary before storing.
-	const resolvedOwner = await resolvePositionOwner(normalizeAddress(owner), normalizeAddress(position), event.transaction.hash, client);
-
-	await context.db.insert(MintingHubV2PositionV2).values({
+	await context.db.insert(MintingHubV1PositionV1).values({
 		position: normalizeAddress(position),
-		owner: resolvedOwner,
+		owner,
 		zchf,
 		collateral,
 		price,
@@ -133,15 +118,14 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 		denyDate: 0n,
 		closed,
 		original,
-		parent,
 
 		minimumCollateral,
-		riskPremiumPPM,
+		annualInterestPPM,
 		reserveContribution,
-		start: BigInt(start),
-		cooldown: BigInt(cooldown),
-		expiration: BigInt(expiration),
-		challengePeriod: BigInt(challengePeriod),
+		start,
+		cooldown,
+		expiration,
+		challengePeriod,
 
 		zchfName,
 		zchfSymbol,
@@ -152,9 +136,10 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 		collateralDecimals,
 		collateralBalance,
 
+		limitForPosition,
 		limitForClones,
+		availableForPosition,
 		availableForClones,
-		availableForMinting,
 		minted,
 	});
 
@@ -164,7 +149,7 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 	await context.db
 		.insert(CommonEcosystem)
 		.values({
-			id: 'MintingHubV2:TotalPositions',
+			id: 'MintingHubV1:TotalPositions',
 			value: '',
 			amount: 1n,
 		})
@@ -173,7 +158,7 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 		}));
 
 	await context.db
-		.insert(MintingHubV2Status)
+		.insert(MintingHubV1Status)
 		.values({
 			position: normalizeAddress(event.args.position),
 			ownerTransfersCounter: 0n,
@@ -185,30 +170,40 @@ ponder.on('MintingHubV2:PositionOpened', async ({ event, context }) => {
 		.onConflictDoNothing();
 });
 
-ponder.on('MintingHubV2:ChallengeStarted', async ({ event, context }) => {
+/**
+struct ChallengeV1 {
+	address challenger; // the address from which the challenge was initiated
+	uint64 start; // the start of the challenge
+	IPosition position; // the position that was challenged
+	uint256 size; // how much collateral the challenger provided
+}
+**/
+// event ChallengeStarted(address indexed challenger, address indexed position, uint256 size, uint256 number);
+// emit ChallengeStarted(msg.sender, address(position), _collateralAmount, pos);
+ponder.on('MintingHubV1:ChallengeStarted', async ({ event, context }) => {
 	const { client } = context;
-	const { MintingHubV2, PositionV2 } = context.contracts;
+	const { MintingHubV1 } = context.contracts;
 
 	const [challenges, period, liqPrice] = await Promise.all([
 		client.readContract({
-			abi: MintingHubV2.abi,
-			address: MintingHubV2.address,
+			abi: MintingHubV1.abi,
+			address: MintingHubV1.address,
 			functionName: 'challenges',
 			args: [event.args.number],
 		}),
-		client.readContract({ abi: PositionV2.abi, address: event.args.position, functionName: 'challengePeriod' }),
-		client.readContract({ abi: PositionV2.abi, address: event.args.position, functionName: 'price' }),
+		client.readContract({ abi: PositionV1ABI, address: event.args.position, functionName: 'challengePeriod' }),
+		client.readContract({ abi: PositionV1ABI, address: event.args.position, functionName: 'price' }),
 	]);
 
-	await context.db.insert(MintingHubV2ChallengeV2).values({
+	await context.db.insert(MintingHubV1ChallengeV1).values({
 		position: normalizeAddress(event.args.position),
 		number: event.args.number,
 		txHash: event.transaction.hash,
 
 		challenger: event.args.challenger,
-		start: BigInt(challenges[1]),
+		start: challenges[1],
 		created: event.block.timestamp,
-		duration: BigInt(period),
+		duration: period,
 		size: event.args.size,
 		liqPrice,
 
@@ -223,7 +218,7 @@ ponder.on('MintingHubV2:ChallengeStarted', async ({ event, context }) => {
 	await context.db
 		.insert(CommonEcosystem)
 		.values({
-			id: 'MintingHubV2:TotalChallenges',
+			id: 'MintingHubV1:TotalChallenges',
 			value: '',
 			amount: 1n,
 		})
@@ -232,7 +227,7 @@ ponder.on('MintingHubV2:ChallengeStarted', async ({ event, context }) => {
 		}));
 
 	await context.db
-		.insert(MintingHubV2Status)
+		.insert(MintingHubV1Status)
 		.values({
 			position: normalizeAddress(event.args.position),
 			ownerTransfersCounter: 0n,
@@ -247,38 +242,38 @@ ponder.on('MintingHubV2:ChallengeStarted', async ({ event, context }) => {
 });
 
 // event ChallengeAverted(address indexed position, uint256 number, uint256 size);
-ponder.on('MintingHubV2:ChallengeAverted', async ({ event, context }) => {
+ponder.on('MintingHubV1:ChallengeAverted', async ({ event, context }) => {
 	const { client } = context;
-	const { MintingHubV2, PositionV2 } = context.contracts;
+	const { MintingHubV1 } = context.contracts;
 
 	const [challenges, cooldown, liqPrice, challenge] = await Promise.all([
 		client.readContract({
-			abi: MintingHubV2.abi,
-			address: MintingHubV2.address,
+			abi: MintingHubV1.abi,
+			address: MintingHubV1.address,
 			functionName: 'challenges',
 			args: [event.args.number],
 		}),
-		client.readContract({ abi: PositionV2.abi, address: event.args.position, functionName: 'cooldown' }),
-		client.readContract({ abi: PositionV2.abi, address: event.args.position, functionName: 'price' }),
-		context.db.find(MintingHubV2ChallengeV2, { position: normalizeAddress(event.args.position), number: event.args.number }),
+		client.readContract({ abi: PositionV1ABI, address: event.args.position, functionName: 'cooldown' }),
+		client.readContract({ abi: PositionV1ABI, address: event.args.position, functionName: 'price' }),
+		context.db.find(MintingHubV1ChallengeV1, { position: normalizeAddress(event.args.position), number: event.args.number }),
 	]);
 
 	if (!challenge) {
-		console.error('ChallengeV2 not found in ChallengeAverted event:', {
+		console.error('ChallengeV1 not found in ChallengeAverted event:', {
 			position: event.args.position,
 			number: event.args.number,
 			size: event.args.size,
 			txHash: event.transaction.hash,
 			blockNumber: event.block.number,
 		});
-		throw new Error('ChallengeV2 not found');
+		throw new Error('ChallengeV1 not found');
 	}
 
 	// Keep as bigint throughout calculations to preserve precision
 	const _amount = (liqPrice * event.args.size) / BigInt(10 ** 18);
 
-	// create ChallengeBidV2 entry
-	await context.db.insert(MintingHubV2ChallengeBidV2).values({
+	// create ChallengeBidV1 entry
+	await context.db.insert(MintingHubV1ChallengeBidV1).values({
 		position: normalizeAddress(event.args.position),
 		number: event.args.number,
 		numberBid: challenge.bids,
@@ -293,26 +288,24 @@ ponder.on('MintingHubV2:ChallengeAverted', async ({ event, context }) => {
 		challengeSize: challenge.size,
 	});
 
-	// update ChallengeV2 related changes
+	// update ChallengeV1 related changes
 	await context.db
-		.update(MintingHubV2ChallengeV2, { position: normalizeAddress(event.args.position), number: event.args.number })
+		.update(MintingHubV1ChallengeV1, { position: normalizeAddress(event.args.position), number: event.args.number })
 		.set((current) => ({
 			bids: current.bids + 1n,
 			filledSize: current.filledSize + event.args.size,
 			status: challenges[3] === 0n ? 'Success' : current.status,
 		}));
 
-	// update PositionV2 related changes
-	await context.db
-		.update(MintingHubV2PositionV2, { position: normalizeAddress(event.args.position) })
-		.set({ cooldown: BigInt(cooldown) });
+	// update PositionV1 related changes
+	await context.db.update(MintingHubV1PositionV1, { position: normalizeAddress(event.args.position) }).set({ cooldown });
 
 	// ------------------------------------------------------------------
 	// COMMON
 	await context.db
 		.insert(CommonEcosystem)
 		.values({
-			id: 'MintingHubV2:TotalAvertedBids',
+			id: 'MintingHubV1:TotalAvertedBids',
 			value: '',
 			amount: 1n,
 		})
@@ -320,28 +313,28 @@ ponder.on('MintingHubV2:ChallengeAverted', async ({ event, context }) => {
 			amount: current.amount + 1n,
 		}));
 
-	await context.db.update(MintingHubV2Status, { position: normalizeAddress(event.args.position) }).set((current) => ({
+	await context.db.update(MintingHubV1Status, { position: normalizeAddress(event.args.position) }).set((current) => ({
 		challengeAvertedBidsCounter: current.challengeAvertedBidsCounter + 1n,
 	}));
 });
 
-ponder.on('MintingHubV2:ChallengeSucceeded', async ({ event, context }) => {
+ponder.on('MintingHubV1:ChallengeSucceeded', async ({ event, context }) => {
 	const { client } = context;
-	const { MintingHubV2, PositionV2 } = context.contracts;
+	const { MintingHubV1 } = context.contracts;
 
 	const [challenges, cooldown, challenge] = await Promise.all([
 		client.readContract({
-			abi: MintingHubV2.abi,
-			address: MintingHubV2.address,
+			abi: MintingHubV1.abi,
+			address: MintingHubV1.address,
 			functionName: 'challenges',
 			args: [event.args.number],
 		}),
-		client.readContract({ abi: PositionV2.abi, address: event.args.position, functionName: 'cooldown' }),
-		context.db.find(MintingHubV2ChallengeV2, { position: normalizeAddress(event.args.position), number: event.args.number }),
+		client.readContract({ abi: PositionV1ABI, address: event.args.position, functionName: 'cooldown' }),
+		context.db.find(MintingHubV1ChallengeV1, { position: normalizeAddress(event.args.position), number: event.args.number }),
 	]);
 
 	if (!challenge) {
-		console.error('ChallengeV2 not found in ChallengeSucceeded event:', {
+		console.error('ChallengeV1 not found in ChallengeSucceeded event:', {
 			position: event.args.position,
 			number: event.args.number,
 			bid: event.args.bid,
@@ -350,14 +343,14 @@ ponder.on('MintingHubV2:ChallengeSucceeded', async ({ event, context }) => {
 			txHash: event.transaction.hash,
 			blockNumber: event.block.number,
 		});
-		throw new Error('ChallengeV2 not found');
+		throw new Error('ChallengeV1 not found');
 	}
 
 	// Keep as bigint throughout calculations to preserve precision
 	const _price = (event.args.bid * BigInt(10 ** 18)) / event.args.challengeSize;
 
-	// create ChallengeBidV2 entry
-	await context.db.insert(MintingHubV2ChallengeBidV2).values({
+	// create ChallengeBidV1 entry
+	await context.db.insert(MintingHubV1ChallengeBidV1).values({
 		position: normalizeAddress(event.args.position),
 		number: event.args.number,
 		numberBid: challenge.bids,
@@ -372,9 +365,9 @@ ponder.on('MintingHubV2:ChallengeSucceeded', async ({ event, context }) => {
 		challengeSize: challenge.size,
 	});
 
-	// update ChallengeV2 related changes
+	// update ChallengeV1 related changes
 	await context.db
-		.update(MintingHubV2ChallengeV2, { position: normalizeAddress(event.args.position), number: event.args.number })
+		.update(MintingHubV1ChallengeV1, { position: normalizeAddress(event.args.position), number: event.args.number })
 		.set((current) => ({
 			bids: current.bids + 1n,
 			acquiredCollateral: current.acquiredCollateral + event.args.acquiredCollateral,
@@ -382,17 +375,15 @@ ponder.on('MintingHubV2:ChallengeSucceeded', async ({ event, context }) => {
 			status: challenges[3] === 0n ? 'Success' : current.status,
 		}));
 
-	// update PositionV2 related changes
-	await context.db
-		.update(MintingHubV2PositionV2, { position: normalizeAddress(event.args.position) })
-		.set({ cooldown: BigInt(cooldown) });
+	// update PositionV1 related changes
+	await context.db.update(MintingHubV1PositionV1, { position: normalizeAddress(event.args.position) }).set({ cooldown });
 
 	// ------------------------------------------------------------------
 	// COMMON
 	await context.db
 		.insert(CommonEcosystem)
 		.values({
-			id: 'MintingHubV2:TotalSucceededBids',
+			id: 'MintingHubV1:TotalSucceededBids',
 			value: '',
 			amount: 1n,
 		})
@@ -400,7 +391,7 @@ ponder.on('MintingHubV2:ChallengeSucceeded', async ({ event, context }) => {
 			amount: current.amount + 1n,
 		}));
 
-	await context.db.update(MintingHubV2Status, { position: normalizeAddress(event.args.position) }).set((current) => ({
+	await context.db.update(MintingHubV1Status, { position: normalizeAddress(event.args.position) }).set((current) => ({
 		challengeSucceededBidsCounter: current.challengeSucceededBidsCounter + 1n,
 	}));
 });
