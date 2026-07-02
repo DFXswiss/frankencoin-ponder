@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   DOCKER_TAGS: dfxswiss/frankencoin-ponder:latest
 
