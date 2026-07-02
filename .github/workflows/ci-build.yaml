@@ -1,0 +1,31 @@
+name: CI build check
+
+# Validates that the Docker image builds on every pull request, without
+# pushing anything. The dev/prd workflows only build-and-push on merge to
+# develop/main, so this is the pre-merge gate that proves the image (yarn
+# install + patch-package postinstall) still compiles before review/merge.
+
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Docker image (validation)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
