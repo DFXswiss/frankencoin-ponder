@@ -1,0 +1,11 @@
+.dev/
+.git/
+.ponder/
+generated/
+node_modules/
+.env
+.env.example
+.gitignore
+.prettierrc.json
+Dockerfile
+README.md
